@@ -1,0 +1,432 @@
+openapi: 3.1.0
+info:
+  title: Todo App API
+  description: |
+    Secure, user-isolated Todo API with JWT authentication.
+
+    **Authentication**: All endpoints (except health check) require JWT Bearer token.
+
+    **Data Isolation**: Users can only access their own todos. Cross-user access attempts return 404.
+
+    **Error Format**: All errors follow `{"detail": "message", "error_code": "CODE"}` format.
+  version: 1.0.0
+  contact:
+    name: API Support
+    email: support@example.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:8000/api
+    description: Local development server
+  - url: https://api.example.com/api
+    description: Production server
+
+tags:
+  - name: Health
+    description: Service health and status endpoints
+  - name: Users
+    description: User synchronization operations
+  - name: Todos
+    description: Todo CRUD operations (requires authentication)
+
+security:
+  - BearerAuth: []
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: Returns service status (no authentication required)
+      operationId: health_check
+      security: []  # No auth required
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /users/sync:
+    post:
+      tags:
+        - Users
+      summary: Sync user from Better Auth to FastAPI
+      description: |
+        Creates a minimal user record in FastAPI database after Better Auth registration.
+        Extracts user_id and email from JWT payload. Idempotent (safe to call multiple times).
+      operationId: sync_user
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: User synced successfully (created or already exists)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserSyncResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /todos:
+    get:
+      tags:
+        - Todos
+      summary: List user's todos
+      description: |
+        Returns paginated list of todos owned by authenticated user.
+        Results ordered by creation date (newest first).
+      operationId: list_todos
+      parameters:
+        - name: skip
+          in: query
+          description: Number of records to skip (for pagination)
+          required: false
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+        - name: limit
+          in: query
+          description: Maximum number of records to return
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 100
+      responses:
+        '200':
+          description: Todos retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TodoListResponse'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    post:
+      tags:
+        - Todos
+      summary: Create a new todo
+      description: Creates a new todo item for authenticated user
+      operationId: create_todo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TodoCreate'
+      responses:
+        '201':
+          description: Todo created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TodoResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /todos/{todo_id}:
+    get:
+      tags:
+        - Todos
+      summary: Get a specific todo
+      description: |
+        Returns todo details if owned by authenticated user.
+        Returns 404 if todo doesn't exist OR belongs to another user (data isolation).
+      operationId: get_todo
+      parameters:
+        - $ref: '#/components/parameters/TodoIdParam'
+      responses:
+        '200':
+          description: Todo retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TodoResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    put:
+      tags:
+        - Todos
+      summary: Update a todo
+      description: |
+        Updates todo fields (title, description, completed status).
+        Only owned todos can be updated. Returns 404 for cross-user access.
+      operationId: update_todo
+      parameters:
+        - $ref: '#/components/parameters/TodoIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TodoUpdate'
+      responses:
+        '200':
+          description: Todo updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TodoResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      tags:
+        - Todos
+      summary: Delete a todo
+      description: |
+        Permanently deletes a todo item. Only owned todos can be deleted.
+        Returns 404 for cross-user access attempts.
+      operationId: delete_todo
+      parameters:
+        - $ref: '#/components/parameters/TodoIdParam'
+      responses:
+        '204':
+          description: Todo deleted successfully (no content returned)
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          $ref: '#/components/responses/NotFoundError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        JWT token issued by Better Auth after login.
+        Format: `Authorization: Bearer <token>`
+
+  parameters:
+    TodoIdParam:
+      name: todo_id
+      in: path
+      required: true
+      description: UUID of the todo item
+      schema:
+        type: string
+        format: uuid
+      example: "550e8400-e29b-41d4-a716-446655440000"
+
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          example: "ok"
+
+    UserSyncResponse:
+      type: object
+      required:
+        - id
+        - email
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: User UUID (matches Better Auth user ID)
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        email:
+          type: string
+          format: email
+          description: User's email address
+          example: "alice@example.com"
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp when user was first synced
+          example: "2025-12-31T10:30:00Z"
+
+    TodoCreate:
+      type: object
+      required:
+        - title
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+          description: Todo item title (cannot be empty or whitespace)
+          example: "Buy groceries"
+        description:
+          type: string
+          maxLength: 2000
+          nullable: true
+          description: Optional detailed description
+          example: "Need milk, eggs, and bread from the store"
+
+    TodoUpdate:
+      type: object
+      properties:
+        title:
+          type: string
+          minLength: 1
+          maxLength: 500
+          nullable: true
+          description: New title (if updating title)
+          example: "Buy groceries and cook dinner"
+        description:
+          type: string
+          maxLength: 2000
+          nullable: true
+          description: New description (if updating description)
+          example: "Updated shopping list"
+        completed:
+          type: boolean
+          nullable: true
+          description: New completion status (if toggling)
+          example: true
+
+    TodoResponse:
+      type: object
+      required:
+        - id
+        - user_id
+        - title
+        - completed
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique todo identifier
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        user_id:
+          type: string
+          format: uuid
+          description: Owner's user ID
+          example: "123e4567-e89b-12d3-a456-426614174000"
+        title:
+          type: string
+          description: Todo title
+          example: "Buy groceries"
+        description:
+          type: string
+          nullable: true
+          description: Todo description (null if not provided)
+          example: "Milk, eggs, bread"
+        completed:
+          type: boolean
+          description: Completion status
+          example: false
+        created_at:
+          type: string
+          format: date-time
+          description: Creation timestamp
+          example: "2025-12-31T10:00:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          description: Last update timestamp
+          example: "2025-12-31T10:30:00Z"
+
+    TodoListResponse:
+      type: object
+      required:
+        - data
+        - total
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/TodoResponse'
+          description: Array of todo items
+        total:
+          type: integer
+          description: Total count of user's todos (for pagination)
+          example: 42
+
+    ErrorResponse:
+      type: object
+      required:
+        - detail
+        - error_code
+      properties:
+        detail:
+          type: string
+          description: Human-readable error message
+          example: "Todo not found"
+        error_code:
+          type: string
+          description: Machine-readable error code
+          example: "NOT_FOUND"
+
+  responses:
+    ValidationError:
+      description: Invalid request body or parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            detail: "Title cannot be empty or whitespace"
+            error_code: "VALIDATION_ERROR"
+
+    UnauthorizedError:
+      description: Missing or invalid JWT token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            detail: "Invalid or expired token"
+            error_code: "UNAUTHORIZED"
+
+    NotFoundError:
+      description: Resource not found or not owned by user
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            detail: "Todo not found"
+            error_code: "NOT_FOUND"
+
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            detail: "Service temporarily unavailable. Please try again."
+            error_code: "INTERNAL_ERROR"
